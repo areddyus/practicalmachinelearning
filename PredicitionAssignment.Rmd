@@ -1,0 +1,199 @@
+---
+title: "Coursera Course 8 Week 4 - Prediction Assignment"
+output: html_document
+---
+Robert O'Brien  
+July 19, 2017  
+
+## Excutive Summary
+A prediction model was successfully arrived at for weather or not a person was doing an activity
+correctly, as compared to just predicting how much of the activity they were doing. The accuracy
+of the model was above 99% and had a slightly larger error rate when used on unseen data than
+the error rate when used on sample data with known outcomes suggeting model was not overfitted.
+
+## Overview
+The objective of this analysis was to come up with a predictive model to determine weather or not 
+a person was doing an activity correctly not just how much of the activity they were doing.  The 
+dataset comes from data captured using wearable devices such as Jawbone Up, Nike FuelBand, and Fitbit.
+Accelerometers on the belt, forearm, arm, and dumbell of 6 participants captured data while they
+performed barbell lifts correctly and incorrectly in 5 different ways.  More information is available 
+from the website http://groupware.les.inf.puc-rio.br/har under the section entitled "Weight Lifting 
+Exercises Dataset".
+
+```{r knitr-global-options, include=FALSE}
+knitr::opts_chunk$set(cache.path = 'rmd_reusable_cache/', cache.comments = FALSE, comment = FALSE, message = FALSE, warning = FALSE)
+# for more details see http://rmarkdown.rstudio.com/developer_parameterized_reports.html
+# with cache.path not specified each run ends up using a unique rmd_<alphanumeric x 12>_cache/html folder so prior run chunk cache files never found
+# with cache.path specified each run looks for chunk RData/rdb/rdx cache files in the root of the specified folder and so they are found
+# cache filenames consists of the chunk label with md5 digest of the R code in the chunk so any changes in chunk will cause it to look for new filename
+# with cache.comments specified changing comments in R code chunks will not invalidate the cache database
+```
+
+## Data Processing
+Here I'll load the data and do some data tidying in order to make creation of predictive model 
+feasible. When it comes to dropping columns deemed unnecessary or with too many missing values
+I'll only be doing this on training dataset as prediction model won't care they are present when 
+run against testing dataset as it'll only use column data determined to be relevant.
+
+```{r data-processing1, cache=TRUE}
+trainingUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testingUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+training <- read.csv(trainingUrl, na.strings=c("", "#DIV/0!", "NA"))
+testing <- read.csv(testingUrl, na.strings = c("", "#DIV/0!", "NA"))
+```
+
+First i'll remove columns from data that shouldn't be relevant to activity quality predictive model.
+```{r data-processing2}
+# the first column of the data is just a row number, perhaps from write.cvs w/o row.names = FALSE
+training$X <- NULL
+# the user name and timestamp of activities should have no effect on whether they were done correctly
+for (col in c("user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp")) {
+    training[,col] <- NULL
+}
+```
+
+Second i'll remove columns from data that have significant number of missing values and ones that
+have so little, or no, variance such that they are irrelevant predictors.
+```{r data-processing3}
+colSumNAs <- apply(training, 2, function(x) sum(is.na(x)))
+training <- training[, colSumNAs == 0] # drop all NAs or < some threshold
+#training <- training[, colSums(is.na(training)) < 100] # drop all NAs or < some threshold
+
+library(caret); nsv <- nearZeroVar(training); training <- training[-nsv] # drop zero variance predictors
+#training <- training[, !sapply(training, is.character)] # drop character class columns which zvp covers 
+```
+
+This leaves the following `r ncol(training)` columns as the set of predictors that will get used in classification 
+processing.
+```{r data-processing4}
+colnames(training)
+```
+
+## Data Analysis
+Now I'm going to build a random forest model to enable predicting the classe outcome. To determine the accuracy of 
+the model I'll use a cross-validation approach involving 10-fold random subsampling, vs k-fold or leave one out,
+approach.  Within each fold an 80/20 split of train and test data will be created.  Note that documentation on 
+random forest training function suggests that caller need not orchestrate cross-validation, see appendix referenced 
+article for more details. Even so i included cross-validation given assignment details and discussions suggested 
+that reviewers would be expecting to see it done vs relying on capabilities of classification function.
+
+```{r data-analysis-rfRssCv, cache=TRUE, dependson="data-processing1"}
+library(randomForest); set.seed(100); obs <- c(); preds <- c()
+for (i in 1:10) { # takes approximately 8 minutes to run w/o cluster
+    inTrain <- sample(1:dim(training)[1], size = dim(training)[1] * 0.8, replace = FALSE)
+    trainingCv <- training[inTrain,]; testingCv <- training[-inTrain,]
+    modelRf <- randomForest(classe ~ ., data = trainingCv)
+    obs <- c(obs, testingCv$classe); preds <- c(preds, predict(modelRf, testingCv))
+}
+```
+
+```{r data-analysis-rfKfoldCv, cache=TRUE, dependson="data-processing1", echo=FALSE, eval=FALSE}
+library(caret); set.seed(100)
+trainingCv <- createFolds(y = training$classe, k = 10, list = TRUE, returnTrain = TRUE)
+testingCv <- createFolds(y = training$classe, k = 10, list = TRUE, returnTrain = FALSE)
+sapply(trainingCv, length); trainingCv[[1]][1:10]; sapply(testingCv, length); testingCv[[1]][1:10]
+all.equal(trainingCv[[1]], trainingCv[[10]])
+library(randomForest); set.seed(100); obs <- c(); preds <- c()
+for (i in 1:10) { # takes approximately ?? minutes to run w/o cluster
+    modelRf <- randomForest(classe ~ ., data = trainingCv[[i]])
+    obs <- c(obs, testingCv[[i]]$classe); preds <- c(preds, predict(modelRf, testingCv[[i]]))
+}
+```
+
+```{r data-analysis-rfTrcCv, cache=TRUE, dependson="data-processing1", echo=FALSE, eval=FALSE}
+# using single random subsampling approach applicable if training data set is large or using train cv control
+library(caret); 
+inTrain <- createDataPartition(y = training$classe, p = 0.8, list = FALSE) # leave out 20% of data for prediction testing
+trainingSs <- training[inTrain,]; testingSs <- training[-inTrain,]
+library(parallel); library(doParallel) 
+cluster <- makeCluster(detectCores() - 1); registerDoParallel(cluster) # leave out one core for OS
+trc <- trainControl(method = "cv", number = 10, allowParallel = TRUE, verboseIter = FALSE)  # 10-fold cv with parallel enabled
+modelRf <- train(classe ~ ., data = trainingSs, method = "rf", trControl = trc) # takes approximately ??? minutes to run
+stopCluster(cluster); registerDoSEQ(); rm(list = "cluster")
+preds <- predict(modelRf, newdata = testingSs)
+confmat <- confusionMatrix(preds, testingSs$classe)
+```
+
+The confusion matrix for predictions arrived at uing using cross-validation training and test data is as follows.
+```{r data-analysis-confmat}
+confmat <- confusionMatrix(table(preds, obs))
+confmat$table; confmat$overall[["Accuracy"]]
+```
+
+We see in the contingency table only a few misclassifications and an overall accuracy of `r round(confmat$overall[["Accuracy"]] * 100, 2)`%. 
+This suggests the random forest model is doing a good enough job at classifying. I'll now proceed to apply it to the entire training 
+dataset to arrive at model that can be used predict the classe outcome given the accelerometer captured prediction data.
+
+```{r data-analysis-finalmodel, cache=TRUE, dependson="data-analysis-rfRssCv"}
+set.seed(100)
+modelRf <- randomForest(classe ~ ., data = training) # takes approximately a minute to run w/o cluster
+modelRf # $finalModel necessary to access details if using train() vs randomForest()
+#rownames(modelRf$importance)[order(modelRf$importance, decreasing = TRUE)] # to see list of predictors by importance
+#oobEer <- sum(modelRf$err.rate[, 1])/nrow(modelRf$err.rate) # todo: how to acquire modelRf "oob estimate of error rate"
+cvPredictionsAccuracy <- confmat$overall[["Accuracy"]]
+outOfSampleError <- (1 - cvPredictionsAccuracy) * 100 # using 1 - prediction accuracy for cross-validation samples
+outOfSampleError
+```
+
+#### In and Out of Sample Errors
+As seen in output above the in sample oob [out-of-bag] estimate of error rate is in the range of 0.13-15%, on the actual training dataset we 
+built prediction model with, and out of sample error is `r round(outOfSampleError, 2)`%, which is errors on dataset that wasn't used to train 
+prediction model. These results suggest the prediction model is good in that its not overfitting the in sample training dataset and getting 
+close but not as good a result when used to create predictions on the out of sample testing dataset.
+
+#### Predictions of Test dataset without outcome data
+Below are my final predictions for the test set of 20 cases.
+```{r predictions}
+pred <- predict(modelRf, newdata = testing)
+data.frame("Prediction" = pred)
+write.csv(data.frame("Prediction" = pred), "PredictionAssignmentQuiz.csv")
+```
+
+\pagebreak
+
+## Appendix
+
+#### References
+1. "Human Activity Recognition - Weight Lifting Exercises Dataset" by Groupware@LES. 2013  
+http://groupware.les.inf.puc-rio.br/har  
+2. "Random Forests - The out-of-bag (oob) error estimate" by Leo Breiman and Adele Cutler  
+https://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm#ooberr  
+note: This was top hit in "extracting random forest oob estimate of error rate" results and 
+aligns with coursera discussion forum hits on "random forest oob estimate of error rate".  
+3. "Improving Performance of Random Forest in caret::train()" by Len Greski. July 9, 2017  
+https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md  
+4. "GitHub Html Pages Setup" by  by Len Greski. February 16, 2017  
+https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-ghPagesSetup.md  
+5. "R Markdown Basics" by RStudio Inc. 2016  
+http://rmarkdown.rstudio.com/authoring_basics.html  
+6. "R Markdown Reference" by RStudio Inc. October 30, 2014  
+https://www.rstudio.com/wp-content/uploads/2015/03/rmarkdown-reference.pdf  
+
+#### A visualization of the frequencies for the various classe outcome variable in our training data observations.
+```{r data-visualization1, fig.width = 7, fig.height = 5}
+#plot(training$classe, col = "green", main = "Bar Plot of classe outcome frequencies", xlab = "classe", ylab = "count")
+qplot(classe, data = training, fill = classe, main = "Bar plot of classe outcome frequencies")
+```
+
+#### A visualization of the frequencies for the various classe outcome variable in our training data observations.
+```{r data-visualization2}
+library(corrplot)
+corrplot(cor(training[, - length(names(training))]), method = "color", tl.cex = 0.5)
+```
+
+#### A visualization of the the final model classification tree.
+```{r data-visualization3}
+plot(modelRf, uniform = TRUE, main = "Classification Tree") # append $finalModel if train() generated model
+```
+
+```{r data-visualization3b, echo=FALSE, eval=FALSE}
+text(modelRf$finalModel, use.n = TRUE, all = TRUE, cex = .8) # able to be layered on plot only if train() generated model
+library(rpart.plot) 
+rpart.plot(modelRf, main = "Classification Tree") # usable only for rpart model
+fancyRpartPlot(modelRf$finalModel) # usable only for rpart model
+```
+
+#### A visualization of the the final model predictors variable importance.
+```{r data-visualization4}
+varImpPlot(modelRf, main="Predictor variables by importance", pch = 21, cex=0.8)
+```
