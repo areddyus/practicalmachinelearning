@@ -1,2 +1,0 @@
-# practicalmachinelearning
-practicalmachinelearning by Ac
