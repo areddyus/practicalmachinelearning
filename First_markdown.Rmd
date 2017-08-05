@@ -24,6 +24,7 @@ leaflet() %>%
 addTiles() %>%
 addMarkers(lat=48.858053, lng=2.294289, popup = EiffelTour)
 ```
+#
 
 ## Including Plots
 
