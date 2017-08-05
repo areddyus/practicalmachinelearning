@@ -2,8 +2,8 @@
 title: "Coursera Course 8 Week 4 - Prediction Assignment"
 output: html_document
 ---
-Robert O'Brien  
-July 19, 2017  
+ 
+July 26 , 2017  
 
 ## Excutive Summary
 A prediction model was successfully arrived at for weather or not a person was doing an activity
